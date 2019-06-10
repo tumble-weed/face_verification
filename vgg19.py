@@ -1,4 +1,4 @@
-TEST_PIPELINE = False
+TEST_PIPELINE = True
 # -*- coding: utf-8 -*-
 """running kaiyang zhou center loss with VGG19.ipynb
 
@@ -130,7 +130,7 @@ class ClassBalancedSubsetSampler(torch.utils.data.Sampler):
             self.class_weights = 1./(class_sample_counts)
             self.class_weights = self.class_weights/self.class_weights.sum()
         else:
-            self.class_weights = 1./n_classes_in_set
+            self.class_weights = 1./n_classes_in_set * np.ones_like(class_sample_counts)
         self.classes = classes
         self.class_idx = class_idx
         self.class_to_image_idx = class_to_image_idx
@@ -214,7 +214,7 @@ class LFWDataloaders(object):
         )
         
         testloader = torch.utils.data.DataLoader(
-            testset, sampler=test_sampler,
+            testset, batch_sampler=test_sampler,
             num_workers=num_workers, pin_memory=pin_memory,
         )
 
@@ -254,7 +254,8 @@ parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--save-dir', type=str, default='log')
 parser.add_argument('--plot', action='store_false', help="whether to plot features for every epoch")
 
-args = parser.parse_args(['--dataset','lfw','--gpu','0'])
+#args = parser.parse_args(['--dataset','lfw','--gpu','0'])
+args = parser.parse_args()
 args.use_cpu = False
 args.plot = True
 args.embed_size = 32
@@ -517,12 +518,14 @@ for epoch in tqdm.tqdm(range(args.max_epoch)):
                 all_labels.append(labels.data.numpy())
 
         if (batch_idx+1) % args.print_freq == 0:
-            print("Batch {}/{}\t Loss {:.6f} ({:.6f}) XentLoss {:.6f} ({:.6f}) CenterLoss {:.6f} ({:.6f})" \
-                  .format(batch_idx+1, len(trainloader), losses.val, losses.avg, xent_losses.val, xent_losses.avg, cent_losses.val, cent_losses.avg))
+            print("Batch {}\t Loss {:.6f} ({:.6f}) XentLoss {:.6f} ({:.6f}) CenterLoss {:.6f} ({:.6f})" \
+                  .format(batch_idx+1,  losses.val, losses.avg, xent_losses.val, xent_losses.avg, cent_losses.val, cent_losses.avg))
         #-----------------------------------------------------------------------
         # garbage collection
         gc.collect()
-        if TEST_PIPELINE:
+        if batch_idx>len(trainloader):
+            break
+        if TEST_PIPELINE and batch_idx>2:
             break
 
     if args.plot:
