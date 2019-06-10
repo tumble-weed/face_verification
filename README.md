@@ -15,3 +15,9 @@ weights must be in a folder called trained_models ( will be saved during trainin
 
 data must be in a folder called lfw
 - python vgg19.py --dataset lfw --gpu 0
+
+
+**Some things to try**
+
+- The current scheme has a cross entropy loss which pushes apart different identities, and a center loss that compresses clusters. LFW is too small a dataset, with a 0.8 train split we end up with ~4500 classes, and around ~10 k images, not a good ratio at all. Maybe try a simple modification to triplets, where class centers are pulled apart and not class elements
+
