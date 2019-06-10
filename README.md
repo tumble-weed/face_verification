@@ -5,4 +5,11 @@
 - augmentation was done by random brightness, contrast,saturation, and minor hue jitter, further some random rotation, random up and downscales, 
 as well as random horizontal flips
 - a custom sampler was made to deal with the class imbalance problem
+
+**Testing**
+
 - python test_on_two_images.py image1.png image2.png
+
+**Training**
+data must be in a folder called lfw
+- python vgg19.py --dataset lfw --gpu 0
