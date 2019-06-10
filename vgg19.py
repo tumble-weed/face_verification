@@ -1,4 +1,4 @@
-TEST_PIPELINE = True
+TEST_PIPELINE = False
 # -*- coding: utf-8 -*-
 """running kaiyang zhou center loss with VGG19.ipynb
 
@@ -390,7 +390,7 @@ def test(model, testloader, use_gpu, num_classes, epoch):
         all_features, all_labels = [], []
 
     with torch.no_grad():
-        for data, labels in testloader:
+        for test_batch_idx,(data, labels) in enumerate(tqdm.tqdm(testloader)):
             if use_gpu:
                 data, labels = data.cuda(), labels.cuda()
             if args.dataset.lower() == 'mnist':
@@ -415,6 +415,11 @@ def test(model, testloader, use_gpu, num_classes, epoch):
                 else:
                     all_features.append(features.data.numpy())
                     all_labels.append(labels.data.numpy())
+            if test_batch_idx>len(testloader):
+                break
+            if TEST_PIPELINE:
+                break
+
 
     if args.plot:
         all_features = np.concatenate(all_features, 0)
