@@ -237,7 +237,7 @@ parser.add_argument('-j', '--workers', default=4, type=int,
                     help="number of data loading workers (default: 4)")
 # optimization
 parser.add_argument('--batch-size', type=int, default=64)
-parser.add_argument('--lr-model', type=float, default=0.001, help="learning rate for model")
+parser.add_argument('--lr-model', type=float, default=0.0001, help="learning rate for model")
 parser.add_argument('--lr-cent', type=float, default=0.5, help="learning rate for center loss")
 parser.add_argument('--weight-cent', type=float, default=1, help="weight for center loss")
 parser.add_argument('--max-epoch', type=int, default=100)
@@ -433,6 +433,9 @@ criterion_cent = CenterLoss(num_classes=num_classes, feat_dim=args.embed_size, u
 
 '''--------------- Prepare the optimizers --------------- '''
 optimizer_model = torch.optim.SGD(model.parameters(), lr=args.lr_model, weight_decay=5e-04, momentum=0.9)
+#optimizer_centloss = torch.optim.SGD(criterion_cent.parameters(), lr=args.lr_cent)
+
+#optimizer_model = torch.optim.Adam(model.parameters())
 optimizer_centloss = torch.optim.SGD(criterion_cent.parameters(), lr=args.lr_cent)
 
 if args.stepsize > 0:
