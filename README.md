@@ -8,8 +8,10 @@ as well as random horizontal flips
 
 **Testing**
 
+weights must be in a folder called trained_models ( will be saved during training) you'll need to point to a particular epoch
 - python test_on_two_images.py image1.png image2.png
 
 **Training**
+
 data must be in a folder called lfw
 - python vgg19.py --dataset lfw --gpu 0
