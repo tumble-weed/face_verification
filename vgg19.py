@@ -1,4 +1,8 @@
-TEST_PIPELINE = False
+
+HACKS = {'DEBUG_TRAIN':False,
+'test=train' : False,
+'DEBUG_TEST':False,
+'IGNORE_SOFT_LINK':True}
 # -*- coding: utf-8 -*-
 """running kaiyang zhou center loss with VGG19.ipynb
 
@@ -57,38 +61,45 @@ import math
 import pickle
 from skimage import io
 from PIL import Image
+import lfw_splits
+import os,collections
 
-'''
-Getting information about the lfw folder
-'''
 #-------------------------------------------------------------------------------
 ''' get the folder structure '''
-import os,collections
-train_folder = 'lfw'
-folder_structure = collections.OrderedDict({})
-classes = [d for d in sorted(os.listdir(train_folder)) if os.path.isdir(os.path.join(train_folder,d)) and d not in ['.','..']]
-# if test_mode:
-# #     classes = [classes[c] for c in [2,5]]
-#     classes = classes[:10]
-print(len(classes))
-folder_structure = collections.OrderedDict({c:[f for f in os.listdir(os.path.join(train_folder,c)) if not os.path.isdir(f)] for c in classes})
-if False:print(folder_structure)
-#-------------------------------------------------------------------------------
-''' which classes have which files '''
-class_to_idx = {k:[] for k in folder_structure.keys()}
-filelist = []
-i = 0
-for ( c ,fls) in folder_structure.items():   
+def get_folder_structure(train_folder):
+    folder_structure = collections.OrderedDict({})
+    #HACK
     
-    for fi in fls:
-        filelist.append('/'.join([c,fi]))
-        class_to_idx[c].append(i)
-        i+=1
+    classes = [d for d in sorted(os.listdir(train_folder)) if  d not in ['.','..']]
+    # if test_mode:
+    # #     classes = [classes[c] for c in [2,5]]
+    #     classes = classes[:10]
+    try:
+        listdir = os.listdir
+        os.listdir(os.path.join(train_folder,classes[0]))
+    except:
+        listdir = lambda t: os.listdir(os.readlink(t))
 
+    print(len(classes))
+    folder_structure = collections.OrderedDict({c:[f for f in listdir(os.path.join(train_folder,c))] for c in classes})
+    if False:print(folder_structure)
+    #-------------------------------------------------------------------------------
+    ''' which classes have which files '''
+    class_to_idx = {k:[] for k in folder_structure.keys()}
+    filelist = []
+    i = 0
+    for ( c ,fls) in folder_structure.items():   
+        
+        for fi in fls:
+            filelist.append('/'.join([c,fi]))
+            class_to_idx[c].append(i)
+            i+=1    
+    return folder_structure,classes,class_to_idx,filelist
+folder_structure,classes,class_to_idx,filelist = get_folder_structure('lfw')
 # if True:print(class_to_idx,filelist)
 #-------------------------------------------------------------------------------
 
-''' --------------- Make the LFW Dataset Class --------------- '''
+''' --------------- Transforms --------------- '''
 
 from torch.utils.data import DataLoader
 import transforms
@@ -118,39 +129,59 @@ test_transform = torchvision.transforms.Compose([resize,
     torchvision.transforms.CenterCrop((224,224)),
     tensor_transform])
 
-class ClassBalancedSubsetSampler(torch.utils.data.Sampler):
-    def __init__(self,classes,class_idx,class_to_image_idx,filelist,batch_size,weighted=True):
-        n_classes_in_set = len(class_idx)
-        class_idx = np.sort(class_idx)
-        class_sample_counts = np.zeros((n_classes_in_set,))
-        for cloc,cix in enumerate(class_idx):
-            class_name = classes[cix]
-            class_sample_counts[cloc] = len(class_to_idx[class_name]) + 1e-4
+''' --------------- A sampler for class imbalance problem --------------- '''
+class ClassBalancedSampler(torch.utils.data.Sampler):
+    def __init__(self,classes,class_to_image_idx,batch_size,weighted=True):
+        class_sample_counts = np.zeros((len(classes),))
+        for cix,c in enumerate(classes):
+            class_sample_counts[cix] = len(class_to_idx[c]) + 1e-4
         if weighted:
             self.class_weights = 1./(class_sample_counts)
             self.class_weights = self.class_weights/self.class_weights.sum()
         else:
             self.class_weights = 1./n_classes_in_set * np.ones_like(class_sample_counts)
         self.classes = classes
-        self.class_idx = class_idx
         self.class_to_image_idx = class_to_image_idx
-        self.filelist = filelist
         self.batch_size = batch_size
         self.n_batches_per_epoch = int((sum(class_sample_counts)+self.batch_size-1)//self.batch_size)
-        #import pdb;pdb.set_trace()
-        pass
-
+        self.iter_ix = 0
     def __iter__(self):
         while True:
-            sampled_c = np.random.choice(self.class_idx, size=self.batch_size,replace = True, p= self.class_weights)
+            if self.iter_ix == self.n_batches_per_epoch:
+                return
+            sampled_c = np.random.choice(self.classes, size=self.batch_size,replace = True, p= self.class_weights)
             #import pdb;pdb.set_trace()
-            image_idx = [np.random.choice(self.class_to_image_idx[self.classes[c]]) for c in sampled_c]
+            image_idx = [np.random.choice(self.class_to_image_idx[c]) for c in sampled_c]
             np.random.shuffle(image_idx)
-            filenames = [self.filelist[iix]  for iix in image_idx]
+            self.iter_ix +=1
             yield iter(image_idx)
         pass
     def __len__(self):
-        return self.n_batches_per_epoch
+        return self.n_batches_per_epoch 
+        
+''' --------------- For Testing --------------- '''
+class ClassSampler(torch.utils.data.Sampler):
+    def __init__(self,
+                 class_to_idx,
+                 filelist,
+                 ):
+
+        self.class_to_idx = class_to_idx
+        self.classes = list(self.class_to_idx.keys())
+        self.n_classes = len(self.classes)
+        
+        self.filelist = filelist
+        pass
+    def __iter__(self):
+        for c in self.classes:
+            files = self.class_to_idx[c]
+            yield files        
+        pass
+
+    def __len__(self):
+        return self.n_classes
+        pass
+''' --------------- LFW dataset  --------------- '''
 class LFWDataset(torch.utils.data.Dataset):
     def __init__(self,rootdir,filelist,setnames,transform):
         super(LFWDataset,self).__init__()
@@ -159,9 +190,15 @@ class LFWDataset(torch.utils.data.Dataset):
         self.transform = transform
         self.setnames = setnames
     def __getitem__(self,idx):
+        
         fname = os.path.join(self.rootdir,
                         self.filelist[idx])
+        d,f = os.path.split(fname)
+        if os.path.islink(d):
+            dreal = os.readlink(d)
+            fname = os.path.join(dreal,f)
         label = self.filelist[idx].split('/')[0]
+
         image = io.imread(fname)
         pil_image = Image.fromarray(image)
         tensor_image = self.transform(pil_image)
@@ -170,9 +207,9 @@ class LFWDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.filelist)
         pass
-
+''' --------------- Make LFW dataloaders --------------- '''
 class LFWDataloaders(object):
-    def __init__(self, batch_size, use_gpu, num_workers,train_transform,test_transform,splits = None):
+    def __init__(self, batch_size, use_gpu, num_workers,train_transform,test_transform):
 
         pin_memory = True if use_gpu else False
 
@@ -181,51 +218,54 @@ class LFWDataloaders(object):
         #trainset = torchvision.datasets.ImageFolder(root='./lfw', transform=train_transform)
         #testset = torchvision.datasets.ImageFolder(root='./lfw', transform=test_transform)
 
-    
-        if splits is None:
+        train_dir = os.path.join(args.soft_dir,'train')
+        test_dir = os.path.join(args.soft_dir,'test')
 
-            new_class_order = np.random.permutation(range(len(classes)))
-            train_ratio = 0.8
-            n_train_classes = int(len(classes)*train_ratio)
-            train_idx = new_class_order[:n_train_classes]
-            test_idx = new_class_order[n_train_classes:]
-        else:
-            train_idx = splits['train']
-            test_idx = splits['test']
-            n_train_classes = len(train_idx)
-        if not 'try':
-            print(classes[:10],
-                        np.array(classes)[new_class_order[:10]])
-        train_names = [classes[i] for i in train_idx]
-        test_names = [classes[i] for i in test_idx]
+        train_folder_structure,train_classes,train_class_to_idx,train_filelist = get_folder_structure(train_dir)
+        test_folder_structure,test_classes,test_class_to_idx,test_filelist = get_folder_structure(test_dir)
+        
 
-        trainset = LFWDataset('./lfw',filelist,train_names,train_transform)# need custom Dataset to do balanced sampling
-        testset = LFWDataset('./lfw',filelist,test_names,test_transform)
+
+        trainset = LFWDataset(train_dir,train_filelist,train_classes,train_transform)# need custom Dataset to do balanced sampling
+        testset = LFWDataset(test_dir,test_filelist,test_classes,test_transform)
 
 
         # based on https://gist.github.com/kevinzakka/d33bf8d6c7f06a9d8c76d97a7879f5cb
         #train_sampler = SubsetRandomSampler(train_idx)
-        train_sampler = ClassBalancedSubsetSampler(classes,train_idx,class_to_idx,filelist,batch_size)
-        test_sampler = ClassBalancedSubsetSampler(classes,test_idx,class_to_idx,filelist,batch_size,weighted=False)
+        train_sampler = ClassBalancedSampler(train_classes,train_class_to_idx,batch_size)
+        #test_sampler = ClassBalancedSampler(test_classes,test_class_to_idx,batch_size,weighted=False)
+        test_classwise_sampler = ClassSampler(test_class_to_idx,test_filelist)
+
+
+        
+        #testloader = torch.utils.data.DataLoader(
+        #    testset, 
+        #    num_workers=num_workers, pin_memory=pin_memory,
+        #) # test doesnt need a sampler
 
         trainloader = torch.utils.data.DataLoader(
-            trainset,  batch_sampler=train_sampler, 
-            num_workers=num_workers, pin_memory=pin_memory,
-        )
-        
-        testloader = torch.utils.data.DataLoader(
-            testset, batch_sampler=test_sampler,
-            num_workers=num_workers, pin_memory=pin_memory,
-        )
+                trainset, batch_sampler = train_sampler,
+                num_workers=num_workers, pin_memory=pin_memory,
+            ) # test doesnt need a sampler
+            
+        testloader1 = torch.utils.data.DataLoader(
+                testset, batch_sampler = test_classwise_sampler,
+                num_workers=num_workers, pin_memory=pin_memory,
+            ) # test doesnt need a sampler
 
+        testloader2 = torch.utils.data.DataLoader(
+                testset, batch_sampler = test_classwise_sampler,
+                num_workers=num_workers, pin_memory=pin_memory,
+            ) # test doesnt need a sampler
 
         self.trainloader = trainloader
-        self.testloader = testloader
+        self.testloader1 = testloader1
+        self.testloader2 = testloader2
 #         self.num_classes = 5749
-        self.n_train_classes = n_train_classes
-        self.train_idx = train_idx
-        self.test_idx = test_idx
-        self.num_classes = len(classes)
+        self.n_train_classes = len(train_classes)
+
+#--------------------------------
+
 
 '''---------------  Make the arguments for the run --------------- '''
 
@@ -246,28 +286,46 @@ parser.add_argument('--gamma', type=float, default=0.5, help="learning rate deca
 # model
 parser.add_argument('--model', type=str, default='cnn')
 # misc
-parser.add_argument('--eval-freq', type=int, default=10)#10
+parser.add_argument('--eval-freq', type=int, default=1)#10
 parser.add_argument('--print-freq', type=int, default=25)
 parser.add_argument('--gpu', type=str, default='1')
 parser.add_argument('--seed', type=int, default=1)
 # parser.add_argument('--use-cpu', action='store_false')
 parser.add_argument('--save-dir', type=str, default='log')
 parser.add_argument('--plot', action='store_false', help="whether to plot features for every epoch")
+parser.add_argument('--model_save_path', type=str, default = 'trained_models')
+parser.add_argument('--soft_dir', type=str,default = 'lfw_divided')
+
 
 #args = parser.parse_args(['--dataset','lfw','--gpu','0'])
+
 args = parser.parse_args()
 args.use_cpu = False
 args.plot = True
 args.embed_size = 32
 args.use_normed = True
+args.create_splits = True
+#args.soft_dir = 'lfw_divided'
 # args = parser.parse_args(['--plot','false'])
 
+'''---------------  split lfw into directories --------------- '''
+if args.create_splits:
+    train_ratio = 0.8
+    splits = lfw_splits.create_splits(classes,train_ratio)
+else:
+    with open('lfw_splits','rb') as f:
+        splits = pickle.load(f)
+if not HACKS['IGNORE_SOFT_LINK']:
+    lfw_splits.create_soft_dir('lfw',args.soft_dir,splits)
+print('soft links created')
+
+
 '''for saving'''
-model_savepath = './trained_models/'
+model_savepath = args.model_save_path
 model_name = 'test_model'
 if not os.path.isdir(model_savepath):
     os.makedirs(model_savepath)
-save_every_n_epochs = 1#args.eval_freq
+save_every_n_epochs = 10
 
 '''---------------  some prerequisites: reproducibility, gpu etc. --------------- '''
 
@@ -299,17 +357,13 @@ if args.dataset.lower() == 'mnist':
     trainloader, testloader = dataset.trainloader, dataset.testloader
     num_classes = dataset.num_classes
 elif args.dataset.lower() == 'lfw':
-    #lfw_data = LFWDataloaders('lfw',filelist,transform = transform)
-    #trainloader = torch.utils.data.DataLoader(dataset = lfw_data,batch_size=args.batch_size, 
-    #num_workers=args.workers,)
-    #testloader = trainloader
-    #num_classes = 1680
+
     with open('lfw_splits','rb') as f:
       splits = pickle.load(f)
     dataset = LFWDataloaders(batch_size=args.batch_size, use_gpu=use_gpu,
-    num_workers=args.workers,train_transform=train_transform,test_transform=test_transform,splits=splits)
-    trainloader, testloader = dataset.trainloader, dataset.testloader
-    num_classes = dataset.n_train_classes #dataset.num_classes
+    num_workers=args.workers,train_transform=train_transform,test_transform=test_transform)
+    trainloader, testloader1,testloader2 = dataset.trainloader, dataset.testloader1, dataset.testloader2
+    num_classes = dataset.n_train_classes
 
 '''--------------- Make the model --------------- '''
 
@@ -318,7 +372,7 @@ elif args.dataset.lower() == 'lfw':
 print("Creating model: {}".format(args.model))
 if args.dataset.lower() == 'mnist':
     model = models.create(name=args.model, num_classes=dataset.num_classes)#ConvNet(num_classes=num_classes) 
-else:
+elif args.dataset.lower() == 'lfw':
     
     model = torchvision.models.vgg19(pretrained=True)
 
@@ -330,6 +384,7 @@ else:
     new_out = torch.nn.Linear(args.embed_size,num_classes)
     
     model.classifier[-1] = new_out
+    ''' To get the intermediate features '''
     #--------------------------------------------
     '''
     def make_fwd_hook(store):
@@ -358,79 +413,47 @@ if use_gpu:
     model = model.cuda()
     pass
 
-'''--------------- plotting --------------- '''
-def plot_features(features, labels, num_classes, epoch, prefix):
-    """Plot features on 2D plane.
-
-    Args:
-        features: (num_instances, num_features).
-        labels: (num_instances). 
-    """
-    colors = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
-    for label_idx in range(num_classes):
-        plt.scatter(
-            features[labels==label_idx, 0],
-            features[labels==label_idx, 1],
-            c=colors[label_idx],
-            s=1,
-        )
-    plt.legend(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'], loc='upper right')
-    dirname = osp.join(args.save_dir, prefix)
-    if not osp.exists(dirname):
-        os.mkdir(dirname)
-    save_name = osp.join(dirname, 'epoch_' + str(epoch+1) + '.png')
-    plt.savefig(save_name, bbox_inches='tight')
-    plt.close()
 
 '''--------------- testing --------------- '''
-def test(model, testloader, use_gpu, num_classes, epoch):
+import sklearn.metrics
+def test(model, testloader1,testloader2, use_gpu, num_classes, epoch,d_thresh = np.arange(0.,2.,0.1)):
     model.eval()
-    correct, total = 0, 0
-    if args.plot:
-        all_features, all_labels = [], []
 
+    classwise_dist = []
+    _ = list(testloader1.batch_sampler.class_to_idx.values())
+    classwise_numels = [len(c) for c in _]
+    n_classes = len(testloader1.dataset.setnames)    
+    mean_cluster_d = 0.
+    max_cluster_d = 0.
     with torch.no_grad():
-        for test_batch_idx,(data, labels) in enumerate(tqdm.tqdm(testloader)):
+        for i,(data, labels) in enumerate(tqdm.tqdm(testloader1)):
             if use_gpu:
                 data, labels = data.cuda(), labels.cuda()
-            if args.dataset.lower() == 'mnist':
-                features, outputs = model(data)
-            else:
-                _ = model(data)
-                features = model.classifier[-3].feat 
-                outputs = model.classifier[-1].feat
+
+            c_numel = classwise_numels[i]
+            _ = model(data)
+            features = model.classifier[-3].feat 
+            outputs = model.classifier[-1].feat
 
             feature_normed = features.div(
             torch.norm(features, p=2, dim=1, keepdim=True).expand_as(features))
  
-
-            predictions = outputs.data.max(1)[1]
-            total += labels.size(0)
-            correct += (predictions == labels.data).sum()
+            feature_normed_np = feature_normed.cpu().detach().numpy()
+            feature_normed_np1 = feature_normed_np
+            D_ij = sklearn.metrics.pairwise.euclidean_distances(feature_normed_np1,
+                                     feature_normed_np1)
+            D_ij = np.triu(D_ij,1).flatten()
             
-            if args.plot:
-                if use_gpu:
-                    all_features.append(features.data.cpu().numpy())
-                    all_labels.append(labels.data.cpu().numpy())
-                else:
-                    all_features.append(features.data.numpy())
-                    all_labels.append(labels.data.numpy())
-            if test_batch_idx>len(testloader):
+            class_mean_d = np.mean(D_ij)
+            mean_cluster_d += class_mean_d       
+            max_cluster_d = max(max_cluster_d,class_mean_d)
+
+            ################################################
+
+            if HACKS['DEBUG_TEST']:
                 break
-            if TEST_PIPELINE:
-                break
-
-
-    if args.plot:
-        all_features = np.concatenate(all_features, 0)
-        all_labels = np.concatenate(all_labels, 0)
-        #plot_features(all_features, all_labels, num_classes, epoch, prefix='test')
-
-    acc = correct * 100. / total
-    err = 100. - acc
-    return acc, err
-
-num_classes
+        mean_cluster_d = mean_cluster_d/(i+1)
+    return mean_cluster_d,max_cluster_d
 
 '''--------------- Prepare the criterions --------------- '''
 
@@ -530,7 +553,7 @@ for epoch in tqdm.tqdm(range(args.max_epoch)):
         gc.collect()
         if batch_idx>len(trainloader):
             break
-        if TEST_PIPELINE and batch_idx>2:
+        if HACKS['DEBUG_TRAIN'] and batch_idx>2:
             break
 
     if args.plot:
@@ -546,8 +569,8 @@ for epoch in tqdm.tqdm(range(args.max_epoch)):
     # testing phase        
     if args.eval_freq > 0 and (epoch+1) % args.eval_freq == 0 or (epoch+1) == args.max_epoch:
         print("==> Test")
-        acc, err = test(model, testloader, use_gpu, num_classes, epoch)
-        print("Accuracy (%): {}\t Error rate (%): {}".format(acc, err))
+        mean_cluster_d,max_cluster_d = test(model, testloader1,testloader2, use_gpu, num_classes, epoch)
+        print(f'mean_cluster_d {mean_cluster_d} max_cluster_d {max_cluster_d}')
         #-----------------------------------------------------------------------
         # saving                
         save_params = { 
@@ -555,8 +578,8 @@ for epoch in tqdm.tqdm(range(args.max_epoch)):
             'model_sd': model.state_dict(),
             'optimizer_model_sd': optimizer_model.state_dict(),
             'scheduler_sd' : scheduler.state_dict(),
-            'acc': acc,
-            'err': err,
+            'mean_cluster_d': mean_cluster_d,
+
             }
         torch.save(save_params,model_savepath+model_name+str(epoch)+'.th')
         
