@@ -556,10 +556,6 @@ for epoch in tqdm.tqdm(range(args.max_epoch)):
         if HACKS['DEBUG_TRAIN'] and batch_idx>2:
             break
 
-    if args.plot:
-        all_features = np.concatenate(all_features, 0)
-        all_labels = np.concatenate(all_labels, 0)
-#         plot_features(all_features, all_labels, num_classes, epoch, prefix='train')
    
     #-----------------------------------------------------------------------
     # scheduler step
