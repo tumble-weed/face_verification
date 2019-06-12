@@ -271,7 +271,7 @@ class LFWDataloaders(object):
 parser = argparse.ArgumentParser("Center Loss Example")
 # dataset
 # parser.add_argument('-d', '--dataset', type=str, default='mnist', choices=['mnist'])
-parser.add_argument('-d', '--dataset', type=str, default='mnist')
+parser.add_argument('-d', '--dataset', type=str, default='lfw')
 parser.add_argument('-j', '--workers', default=4, type=int,
                     help="number of data loading workers (default: 4)")
 # optimization
