@@ -147,8 +147,7 @@ class ClassBalancedSampler(torch.utils.data.Sampler):
         self.iter_ix = 0
     def __iter__(self):
         while True:
-            if self.iter_ix == self.n_batches_per_epoch:
-                return
+
             sampled_c = np.random.choice(self.classes, size=self.batch_size,replace = True, p= self.class_weights)
             #import pdb;pdb.set_trace()
             image_idx = [np.random.choice(self.class_to_image_idx[c]) for c in sampled_c]
@@ -426,7 +425,7 @@ def test(model, testloader1,testloader2, use_gpu, num_classes, epoch,d_thresh = 
     mean_cluster_d = 0.
     max_cluster_d = 0.
     with torch.no_grad():
-        for i,(data, labels) in enumerate(tqdm.tqdm(testloader1)):
+        for i,(data, labels) in enumerate(testloader1):
             if use_gpu:
                 data, labels = data.cuda(), labels.cuda()
 
@@ -488,6 +487,7 @@ for epoch in tqdm.tqdm(range(args.max_epoch)):
         all_features, all_labels = [], []
 
     for batch_idx, (data, labels) in enumerate(trainloader):
+        print(batch_idx,)
         #-----------------------------------------------------------------------
         # forward pass
         
@@ -551,9 +551,9 @@ for epoch in tqdm.tqdm(range(args.max_epoch)):
         #-----------------------------------------------------------------------
         # garbage collection
         gc.collect()
-        if batch_idx>len(trainloader):
-            break
         if HACKS['DEBUG_TRAIN'] and batch_idx>2:
+            break
+        if batch_idx>len(trainloader):
             break
 
    
@@ -565,10 +565,12 @@ for epoch in tqdm.tqdm(range(args.max_epoch)):
     # testing phase        
     if args.eval_freq > 0 and (epoch+1) % args.eval_freq == 0 or (epoch+1) == args.max_epoch:
         print("==> Test")
+        mean_cluster_d = 0
         mean_cluster_d,max_cluster_d = test(model, testloader1,testloader2, use_gpu, num_classes, epoch)
         print(f'mean_cluster_d {mean_cluster_d} max_cluster_d {max_cluster_d}')
         #-----------------------------------------------------------------------
-        # saving                
+        # saving
+    if save_every_n_epochs%(epoch+1) == 0:
         save_params = { 
             'epoch': epoch,
             'model_sd': model.state_dict(),
