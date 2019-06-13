@@ -1,7 +1,7 @@
 
 HACKS = {'DEBUG_TRAIN':False,
 'test=train' : False,
-'DEBUG_TEST':False,
+'DEBUG_TEST':True,
 'IGNORE_SOFT_LINK':True}
 # -*- coding: utf-8 -*-
 """running kaiyang zhou center loss with VGG19.ipynb
@@ -415,6 +415,85 @@ if use_gpu:
 
 '''--------------- testing --------------- '''
 import sklearn.metrics
+import pickle
+def test1(model,  testloader, use_gpu, num_classes, epoch,test_batch_size =64, d_thresh = np.arange(0.,2.,0.1),save_folder = 'test_embeds'):
+    model.eval()
+    with torch.no_grad():
+        class_to_idx = testloader.batch_sampler.class_to_idx
+        classes = testloader.dataset.setnames
+        classwise_dist = []
+
+        classwise_numels = [len(class_to_idx[c]) for c in classes]
+        n_classes = len(classes)
+        if not os.path.isdir(save_folder):
+            os.makedirs(save_folder)
+        dummy_im = torch.zeros((1,3,224,224)).float().cuda()
+        _ = model(dummy_im)
+        features_dummy = model.classifier[-3].feat
+        for cix,c1 in enumerate(classes):
+            
+            fix_in_c1 = class_to_idx[c1]
+            batch_c1 = testloader.collate_fn([testloader.dataset[i][0] for i in fix_in_c1])
+            #print(cix,batch_c1.shape)
+            batch_feats = np.zeros((batch_c1.shape[0],features_dummy.shape[-1]))
+            nbatches = (batch_c1.shape[0] + test_batch_size -1)//test_batch_size
+
+            for b in range(nbatches):
+                if use_gpu:                
+                    batch_c1_b= batch_c1[b*test_batch_size:(b+1)*test_batch_size].cuda()
+                _ = model(batch_c1_b)
+                features_b = model.classifier[-3].feat 
+                outputs_b = model.classifier[-1].feat
+                feature_normed1_b = features_b.div(
+                torch.norm(features_b, p=2, dim=1, keepdim=True).expand_as(features_b)) 
+                      
+                feature_normed1_b_np = feature_normed1_b.detach().cpu().numpy()
+                batch_feats[:feature_normed1_b_np.shape[0]] = feature_normed1_b_np
+                            
+            with open(os.path.join(save_folder,c1+'.pkl'),'wb') as f:
+                pickle.dump(batch_feats,f)
+            del batch_c1,batch_feats
+            import gc; gc.collect()
+    tp = {d:0. for d in d_thresh}
+    fp = {d:0. for d in d_thresh}
+    n_pairs_same = 0
+    n_pairs_diff = 0
+    for cix,c1 in enumerate(classes):
+        with open(os.path.join(save_folder,c1+'.pkl'),'rb') as f:
+            feature_normed1_np= pickle.load(f)
+        for cix2,c2 in enumerate(classes[:cix+1]):
+            with open(os.path.join(save_folder,c2+'.pkl'),'rb') as f:
+                feature_normed2_np= pickle.load(f)
+            D_ij = sklearn.metrics.pairwise.euclidean_distances(feature_normed1_np,
+                                     feature_normed2_np)
+            D_ij = np.triu(D_ij,1).flatten()
+            
+            if cix==cix2:
+                n_pairs_same += classwise_numels[cix] * (classwise_numels[cix2] - 1)/2
+                for d in d_thresh:
+                    tp[d] += (D_ij <d).sum() - classwise_numels[cix] # remove self retrievals
+            else:
+                n_pairs_diff = classwise_numels[cix] * classwise_numels[cix2]
+                for d in d_thresh:
+                    fp[d] += (D_ij<d).sum()
+                
+    recall = {d:tp_d/n_pairs_same for d,tp_d in tp.items()}
+    precision = {d:tp[d]/(tp[d] + fp[d]) for d in d_thresh}
+    
+    recall_np = np.array(list(recall.values()))
+    precision_np = np.array(list(precision.values()))
+    
+    AP = np.sum((recall_np[1:] - recall_np[:-1])*precision_np[1:])
+    
+    test_results = {'recall':recall,
+                    'precision':precision,
+                    'recall_np':recall_np,
+                    'precision_np':precision_np,
+                    'AP':AP}
+    return test_results
+
+'''--------------- testing --------------- '''
+import sklearn.metrics
 def test(model, testloader1,testloader2, use_gpu, num_classes, epoch,d_thresh = np.arange(0.,2.,0.1)):
     model.eval()
 
@@ -565,9 +644,14 @@ for epoch in tqdm.tqdm(range(args.max_epoch)):
     # testing phase        
     if args.eval_freq > 0 and (epoch+1) % args.eval_freq == 0 or (epoch+1) == args.max_epoch:
         print("==> Test")
-        mean_cluster_d = 0
-        mean_cluster_d,max_cluster_d = test(model, testloader1,testloader2, use_gpu, num_classes, epoch)
-        print(f'mean_cluster_d {mean_cluster_d} max_cluster_d {max_cluster_d}')
+        #mean_cluster_d = 0
+        #mean_cluster_d,max_cluster_d = test(model, testloader1,testloader2, use_gpu, num_classes, epoch)
+        #print(f'mean_cluster_d {mean_cluster_d} max_cluster_d {max_cluster_d}')
+
+        
+        test_results = test1(model, testloader1, use_gpu, num_classes, epoch)
+        print(test_results['AP'])
+
         #-----------------------------------------------------------------------
         # saving
     if save_every_n_epochs%(epoch+1) == 0:
@@ -576,7 +660,6 @@ for epoch in tqdm.tqdm(range(args.max_epoch)):
             'model_sd': model.state_dict(),
             'optimizer_model_sd': optimizer_model.state_dict(),
             'scheduler_sd' : scheduler.state_dict(),
-            'mean_cluster_d': mean_cluster_d,
 
             }
         torch.save(save_params,model_savepath+model_name+str(epoch)+'.th')
